@@ -17,3 +17,4 @@ Tables listing all the results of Codeml analysis (in csv format)
 Output files from Bayescode, except the .chain, .gene and .condgene files (due to their considerable size)
 Tabular files showing the results of the four Bayescode chains (.postmeaneffects files)
 Results of the GO term enrichment analysis in tabular format
+GSEA and gbtoclu scripts
