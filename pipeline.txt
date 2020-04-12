@@ -1,0 +1,115 @@
+Pipelines used to generate the data
+###################################
+
+species = Synergus_itoensis Synergus_gifuensis Synergus_japonicus Synergus_umbraculus
+
+augustus --species=nasonia --gff3=on --codingseq=on Genomes/$sp.fasta > Augustus_outputs/$sp.gff3
+
+#use getAnnoFasta.pl to generate codingseq.fasta and aa.fasta files from gff3 files
+
+OrthoFinder-1.1.8/orthofinder -f ./Proteins -t 25
+
+#use orthofinder output to create fasta files with 4 seqs and appropriate species header, leading to the "Unaligned" repositories
+#I will add the exact commands later
+
+--------------------------------------------------------------------------------------------------------------
+#protein alignment
+
+ORTHOGROUPS=$(cat SingleCopyOrthogroups.txt)
+for OG in $ORTHOGROUPS
+do
+	./clustalo -i unaligned_orthologs_aa/$OG -o clustal_aligned_orthologs_aa/$OG.fasta
+	./muscle -in unaligned_orthologs_aa/$OG -out muscle_aligned_orthologs_aa/$OG.fasta
+done
+
+--------------------------------------------------------------------------------------------------------------
+#gblocks
+
+#filtering clustal alignements
+mkdir Gblock_txt_raw_outputs-clustal
+for OG in $ORTHOGROUPS:
+do
+	./Gblocks_0.91b/Gblocks clustal_aligned_orthologs_aa/$OG.fasta -b1=4 -b2=4 -b3=5 -b4=7 -s=n -p=t
+	python gbtoclu.py clustal_aligned_orthologs_aa/$OG.fasta-gb.txt blocks_clustal/$OG.clu
+	grep 'New number of positions' $OG.fasta-gb.txt >> lengths_of_selected_culstal_blocks
+	mv clustal_aligned_orthologs_aa/$OG.fasta-gb.txt Gblock_txt_raw_outputs-clustal
+done
+
+#filtering muscle alignements
+mkdir Gblock_txt_raw_outputs-muscle
+for OG in $ORTHOGROUPS:
+do
+	./Gblocks_0.91b/Gblocks muscle_aligned_orthologs_aa/$OG.fasta -b1=4 -b2=4 -b3=5 -b4=7 -s=n -p=t
+	python gbtoclu.py muscle_aligned_orthologs_aa/$OG.fasta-gb.txt blocks_muscle/$OG.clu
+	grep "New number of positions in" $OG.fasta-gb.txt >> lengths_of_selected_muscle_blocks
+	mv clustal_aligned_orthologs_aa/$OG.fasta-gb.txt Gblock_txt_raw_outputs-muscle
+done
+
+# a few sed can be added to refine the length files
+# said files are usefull for filtering alignments with less than 100 conserved positions
+
+#pal2nal
+
+#align with clustal
+for OG in $ORTHOGROUPS
+do
+	perl pal2nal.v14/pal2nal.pl blocks_clustal/$OG.clu unaligned_orthologs_dna/$OG.fasta -output paml -nogap > paml_alignment_files-clustal/$OG.phy
+done
+
+#align with muscle
+for OG in $ORTHOGROUPS
+do
+	perl pal2nal.v14/pal2nal.pl blocks_muscle/$OG.clu unaligned_orthologs_dna/$OG.fasta -output paml -nogap > paml_alignment_files-muscle/$OG.phy
+done
+
+--------------------------------------------------------------------------------------------------------------
+
+#mrbayes options: aamodelpr=mixed, rates=invgamma, nruns=4, nchains=4, ngen=200,000
+#the set of 300 proteins randomly selected to generate the tree is provided
+
+#codeml: codeml_alalysis_script.sh
+
+#phylip alignments above 100 positions and list of said alignments provided here to save time
+
+#bayescode
+mkdir Bayescode_results-muscle
+mkdir Bayescode_results-clustal
+
+cd phylip_alignments_muscle_long
+CHAINNAME=run_1-muscle
+mpirun -np 20 ../bayescode/data/multigenebranchom -f -d ./long_muscle.list -t ./Synergus.tree $CHAIN_NAME
+mpirun -np 20 ../bayescode/data/readmultigenebranchom -x 200 1 $CHAIN_NAME
+
+#repeat process to generate an independent chain to compare
+CHAINNAME=run_2-muscle
+mpirun -np 20 ../bayescode/data/multigenebranchom -f -d ./long_muscle.list -t ./Synergus.tree $CHAIN_NAME
+mpirun -np 20 ../bayescode/data/readmultigenebranchom -x 200 1 $CHAIN_NAME
+mv run_* ../Bayescode_results-muscle
+
+#then repeat for clustal alignments
+cd ../phylip_alignments_clustal_long
+CHAINNAME=run_3-clustal
+mpirun -np 20 ../bayescode/data/multigenebranchom -f -d ./long_clustal.list -t ./Synergus.tree $CHAIN_NAME
+mpirun -np 20 ../bayescode/data/readmultigenebranchom -x 200 1 $CHAIN_NAME
+CHAINNAME=run_4-clustal
+mpirun -np 20 ../bayescode/data/multigenebranchom -f -d ./long_clustal.list -t ./Synergus.tree $CHAIN_NAME
+mpirun -np 20 ../bayescode/data/readmultigenebranchom -x 200 1 $CHAIN_NAME
+mv run_* ../Bayescode_results-clustal
+cd ..
+
+-------------------------------------------------------------------------------------------------------------
+
+#create the candidate files, with header and put them in lists_of_genes
+#I uses a python script that I will upload once I have properly documented it
+
+#emapper
+#upload the S_gifuensis_aa.fasta file on http://eggnog-mapper.embl.de/ (or any other species, I used S. gifuensis)
+annotation=S_gifuensis_aa.fasta.emapper.annotations
+cut -f1,6 $annotation > $annotation.tsv
+echo 'Parent  GO_term' | cat - "$annotation".tsv > "$annotation".header.tsv
+for GENELIST in $(ls lists_of_genes)
+do
+        Rscript GSEA_run_script.R S_gifuensis_aa.fasta.emapper.annotations.header.tsv lists/$GENELIST
+        mkdir results_$GENELIST
+        mv $GENELIST* ./results_$GENELIST/
+done
